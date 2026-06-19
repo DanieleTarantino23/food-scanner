@@ -89,6 +89,8 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
         videoRef.current,
         (result) => { if (result) fireScan(result.getText()); }
       );
+      // Defensive: force playback in case iOS left the video paused (black).
+      try { await videoRef.current?.play(); } catch {}
     } catch (err) {
       reader.reset();
       const name = err?.name ?? 'Error';
@@ -101,21 +103,26 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
     }
   }, [fireScan]);
 
+  // Manual play trigger — if the live feed is black, a tap forces play()
+  const forcePlay = useCallback(() => {
+    videoRef.current?.play().catch(() => {});
+  }, []);
+
   const stopLive = useCallback(() => {
     liveReader.current?.reset();
     liveReader.current = null;
     setMode('idle');
   }, []);
 
-  const showVideo = mode === 'live';
-
   return (
     <div style={s.root}>
       <input ref={fileRef} type="file" accept="image/*" capture="environment"
         style={{ display: 'none' }} onChange={handlePhoto} />
 
-      <video ref={videoRef} playsInline muted autoPlay
-        style={{ ...s.video, visibility: showVideo ? 'visible' : 'hidden' }} />
+      {/* Always mounted AND visible — attaching the stream to a hidden video
+          makes iOS Safari render it black, so we never hide it. In idle there's
+          no stream, so it's just black behind the overlay (matching the bg). */}
+      <video ref={videoRef} playsInline muted autoPlay style={s.video} />
 
       {/* ── IDLE — photo is the main action ── */}
       {(mode === 'idle' || mode === 'analyzing') && (
@@ -129,12 +136,15 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
         </div>
       )}
 
-      {/* ── LIVE scanning ── */}
+      {/* ── LIVE scanning ── (tap anywhere forces play if the feed is black) */}
       {mode === 'live' && (
-        <div style={s.overlay}>
+        <div style={s.overlay} onClick={forcePlay}>
           <div style={{ ...s.finder, boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)' }} />
           <p style={s.hint}>Inquadra il codice a barre</p>
-          <button onClick={stopLive} style={s.linkBtn}>← torna allo scatto foto</button>
+          <p style={{ ...s.hint, fontSize: 12, opacity: 0.6 }}>Se resta nero, tocca lo schermo</p>
+          <button onClick={(e) => { e.stopPropagation(); stopLive(); }} style={s.linkBtn}>
+            ← torna allo scatto foto
+          </button>
         </div>
       )}
 
