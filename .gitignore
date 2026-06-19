@@ -1,0 +1,23 @@
+node_modules/
+.expo/
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Env files — never commit real keys
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+
+# Vercel
+.vercel
