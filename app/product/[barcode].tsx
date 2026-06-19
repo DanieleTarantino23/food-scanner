@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import { ScrollView, View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import {
+  ScrollView, View, Text, StyleSheet,
+  ActivityIndicator, Image,
+} from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { ScoreRing } from '../../src/components/ScoreRing';
 import { getProduct } from '../../src/lib/lookup';
@@ -12,9 +15,9 @@ export default function ProductDetailScreen() {
   const { barcode } = useLocalSearchParams<{ barcode: string }>();
   const navigation  = useNavigation();
 
-  const [product, setProduct]   = useState<OFFProduct | null>(null);
-  const [scoring, setScoring]   = useState<ScoringResult | null>(null);
-  const [loading, setLoading]   = useState(true);
+  const [product, setProduct] = useState<OFFProduct | null>(null);
+  const [scoring, setScoring] = useState<ScoringResult | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!barcode) return;
@@ -31,7 +34,7 @@ export default function ProductDetailScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={Colors.info} />
+        <ActivityIndicator color={Colors.info} size="large" />
       </View>
     );
   }
@@ -45,33 +48,54 @@ export default function ProductDetailScreen() {
   }
 
   const { healthScore, proteinScore } = scoring;
-  const nutriments = product.nutriments ?? {};
+  const n = product.nutriments ?? {};
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-      {/* Score header */}
+
+      {/* ── Hero image ── */}
+      {product.image_front_url ? (
+        <View style={styles.imageContainer}>
+          <Image
+            source={{ uri: product.image_front_url }}
+            style={styles.productImage}
+            resizeMode="contain"
+          />
+        </View>
+      ) : null}
+
+      {/* ── Score header ── */}
       <View style={styles.header}>
         <ScoreRing score={healthScore.total} size={140} strokeWidth={12} />
-        <Text style={styles.productName}>{product.product_name ?? 'Unknown'}</Text>
-        {product.nutriscore_grade && (
-          <View style={[styles.nutriBadge, { borderColor: scoreColor(healthScore.total) }]}>
-            <Text style={[styles.nutriBadgeText, { color: scoreColor(healthScore.total) }]}>
+        <Text style={styles.productName}>
+          {product.product_name ?? 'Unknown'}
+        </Text>
+        {(product.brands || product.quantity) ? (
+          <Text style={styles.meta}>
+            {[product.brands, product.quantity].filter(Boolean).join(' · ')}
+          </Text>
+        ) : null}
+        {product.nutriscore_grade ? (
+          <View style={[styles.nutriBadge,
+            { borderColor: scoreColor(healthScore.total) }]}>
+            <Text style={[styles.nutriBadgeText,
+              { color: scoreColor(healthScore.total) }]}>
               Nutri-Score {product.nutriscore_grade.toUpperCase()}
             </Text>
           </View>
-        )}
+        ) : null}
       </View>
 
-      {/* Score breakdown */}
+      {/* ── Score breakdown ── */}
       <Section title="Score breakdown">
         <Row label="Nutri-Score"  value={`${healthScore.nutriScoreComponent.toFixed(0)} / 60`} />
         <Row label="Additives"    value={`${healthScore.additiveComponent.toFixed(0)} / 30`} />
         <Row label="Organic"      value={`+${healthScore.organicBonus}`} />
       </Section>
 
-      {/* Protein badge */}
+      {/* ── Protein badge ── */}
       <Section title="Proteins">
-        <Row label="g / 100g"     value={`${proteinScore.gramsPerHundred.toFixed(1)} g`} />
+        <Row label="g / 100g" value={`${proteinScore.gramsPerHundred.toFixed(1)} g`} />
         {proteinScore.caloriePct !== null && (
           <Row label="% of calories" value={`${proteinScore.caloriePct.toFixed(0)}%`} />
         )}
@@ -82,46 +106,32 @@ export default function ProductDetailScreen() {
         )}
       </Section>
 
-      {/* Nutrition facts */}
+      {/* ── Nutrition / 100g ── */}
       <Section title="Nutrition / 100g">
-        {nutriments.energy_kcal_100g !== undefined && (
-          <Row label="Energy"       value={`${nutriments.energy_kcal_100g} kcal`} />
-        )}
-        {nutriments.fat_100g !== undefined && (
-          <Row label="Fat"          value={`${nutriments.fat_100g} g`} />
-        )}
-        {nutriments.saturated_fat_100g !== undefined && (
-          <Row label="Saturated fat" value={`${nutriments.saturated_fat_100g} g`} highlight />
-        )}
-        {nutriments.carbohydrates_100g !== undefined && (
-          <Row label="Carbs"        value={`${nutriments.carbohydrates_100g} g`} />
-        )}
-        {nutriments.sugars_100g !== undefined && (
-          <Row label="Sugars"       value={`${nutriments.sugars_100g} g`} highlight />
-        )}
-        {nutriments.fiber_100g !== undefined && (
-          <Row label="Fiber"        value={`${nutriments.fiber_100g} g`} />
-        )}
-        {nutriments.proteins_100g !== undefined && (
-          <Row label="Proteins"     value={`${nutriments.proteins_100g} g`} />
-        )}
-        {nutriments.salt_100g !== undefined && (
-          <Row label="Salt"         value={`${nutriments.salt_100g} g`} highlight />
-        )}
+        {n.energy_kcal_100g   != null && <Row label="Energy"        value={`${n.energy_kcal_100g} kcal`} />}
+        {n.fat_100g           != null && <Row label="Fat"           value={`${n.fat_100g} g`} />}
+        {n.saturated_fat_100g != null && <Row label="Saturated fat" value={`${n.saturated_fat_100g} g`} highlight />}
+        {n.carbohydrates_100g != null && <Row label="Carbs"         value={`${n.carbohydrates_100g} g`} />}
+        {n.sugars_100g        != null && <Row label="Sugars"        value={`${n.sugars_100g} g`} highlight />}
+        {n.fiber_100g         != null && <Row label="Fiber"         value={`${n.fiber_100g} g`} />}
+        {n.proteins_100g      != null && <Row label="Proteins"      value={`${n.proteins_100g} g`} />}
+        {n.salt_100g          != null && <Row label="Salt"          value={`${n.salt_100g} g`} highlight />}
       </Section>
 
-      {/* Additives list */}
+      {/* ── Additives ── */}
       {product.additives_tags && product.additives_tags.length > 0 && (
         <Section title={`Additives (${product.additives_tags.length})`}>
           {product.additives_tags.map((tag) => (
             <View key={tag} style={styles.additiveRow}>
-              <Text style={styles.additiveTag}>{tag.replace('en:', '').toUpperCase()}</Text>
+              <Text style={styles.additiveTag}>
+                {tag.replace('en:', '').toUpperCase()}
+              </Text>
             </View>
           ))}
         </Section>
       )}
 
-      {/* Allergens */}
+      {/* ── Allergens ── */}
       {product.allergens_tags && product.allergens_tags.length > 0 && (
         <Section title="Allergens">
           <Text style={styles.allergenText}>
@@ -129,6 +139,7 @@ export default function ProductDetailScreen() {
           </Text>
         </Section>
       )}
+
     </ScrollView>
   );
 }
@@ -142,70 +153,70 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({
-  label,
-  value,
-  highlight = false,
-}: {
-  label: string;
-  value: string;
-  highlight?: boolean;
+function Row({ label, value, highlight = false }: {
+  label: string; value: string; highlight?: boolean;
 }) {
   return (
     <View style={styles.row}>
-      <Text style={[styles.rowLabel, highlight && styles.rowLabelHighlight]}>{label}</Text>
-      <Text style={[styles.rowValue, highlight && styles.rowValueHighlight]}>{value}</Text>
+      <Text style={[styles.rowLabel, highlight && styles.rowLabelHl]}>{label}</Text>
+      <Text style={[styles.rowValue, highlight && styles.rowValueHl]}>{value}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  scroll:        { flex: 1, backgroundColor: Colors.bg },
-  content:       { padding: 20, paddingBottom: 48, gap: 24 },
-  center:        { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.bg },
-  empty:         { color: Colors.textTertiary, fontSize: 15 },
+  scroll:   { flex: 1, backgroundColor: Colors.bg },
+  content:  { paddingBottom: 48, gap: 24 },
+  center:   { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.bg },
+  empty:    { color: Colors.textTertiary, fontSize: 15 },
 
-  header:        { alignItems: 'center', gap: 12, paddingVertical: 8 },
-  productName:   { color: Colors.textPrimary, fontSize: 20, fontWeight: '700', textAlign: 'center' },
-  nutriBadge: {
-    borderWidth:     1,
-    borderRadius:    8,
-    paddingVertical:   4,
-    paddingHorizontal: 12,
+  imageContainer: {
+    width: '100%',
+    height: 260,
+    backgroundColor: Colors.bgCard,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  productImage: {
+    width: '80%',
+    height: '90%',
+  },
+
+  header:      { alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingTop: 20 },
+  productName: { color: Colors.textPrimary, fontSize: 22, fontWeight: '700', textAlign: 'center' },
+  meta:        { color: Colors.textTertiary, fontSize: 13, textAlign: 'center' },
+  nutriBadge:  {
+    borderWidth: 1, borderRadius: 8,
+    paddingVertical: 4, paddingHorizontal: 12,
   },
   nutriBadgeText: { fontWeight: '700', fontSize: 13 },
 
-  section:       { gap: 8 },
-  sectionTitle:  { color: Colors.textTertiary, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8 },
-  card:          { backgroundColor: Colors.bgCard, borderRadius: 16, overflow: 'hidden' },
+  section:      { gap: 8, paddingHorizontal: 20 },
+  sectionTitle: {
+    color: Colors.textTertiary, fontSize: 11, fontWeight: '600',
+    textTransform: 'uppercase', letterSpacing: 0.8,
+  },
+  card:         { backgroundColor: Colors.bgCard, borderRadius: 16, overflow: 'hidden' },
 
   row: {
-    flexDirection:   'row',
-    justifyContent:  'space-between',
-    paddingVertical:   12,
-    paddingHorizontal: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingVertical: 12, paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.border,
   },
-  rowLabel:          { color: Colors.textSecondary, fontSize: 15 },
-  rowLabelHighlight: { color: Colors.textPrimary },
-  rowValue:          { color: Colors.textPrimary, fontWeight: '500', fontSize: 15 },
-  rowValueHighlight: { color: Colors.warning },
+  rowLabel:    { color: Colors.textSecondary, fontSize: 15 },
+  rowLabelHl:  { color: Colors.textPrimary },
+  rowValue:    { color: Colors.textPrimary, fontWeight: '500', fontSize: 15 },
+  rowValueHl:  { color: Colors.warning },
 
   excellentBadge: {
-    margin:            12,
-    backgroundColor:   Colors.bgElevated,
-    borderRadius:      10,
-    paddingVertical:   10,
-    alignItems:        'center',
+    margin: 12, backgroundColor: Colors.bgElevated,
+    borderRadius: 10, paddingVertical: 10, alignItems: 'center',
   },
   excellentText: { color: Colors.success, fontWeight: '600', fontSize: 14 },
 
   additiveRow: {
-    paddingVertical:   10,
-    paddingHorizontal: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.border,
+    paddingVertical: 10, paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.border,
   },
   additiveTag:   { color: Colors.warning, fontWeight: '600', fontSize: 14 },
   allergenText:  { color: Colors.error, fontSize: 14, padding: 16, lineHeight: 22 },

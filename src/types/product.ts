@@ -29,4 +29,8 @@ export interface OFFProduct {
   nutriments?: OFFNutriments;
   labels_tags?: string[];       // e.g. ["en:organic", "fr:bio"]
   allergens_tags?: string[];    // e.g. ["en:gluten", "en:milk"]
+  image_front_url?: string;     // product front photo from OFF
+  image_ingredients_url?: string;
+  brands?: string;
+  quantity?: string;            // e.g. "400 g"
 }

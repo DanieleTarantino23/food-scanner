@@ -9,12 +9,16 @@ const cacheKey = (barcode: string) => `product_cache:${barcode}`;
 
 const OFF_FIELDS = [
   'product_name',
+  'brands',
+  'quantity',
   'nutriscore_grade',
   'additives_tags',
   'ingredients',
   'nutriments',
   'labels_tags',
   'allergens_tags',
+  'image_front_url',
+  'image_ingredients_url',
 ].join(',');
 
 // ─── Types ───────────────────────────────────────────────────────────────────
