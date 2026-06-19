@@ -1,7 +1,16 @@
 // @ts-nocheck
-// Web-only barcode scanner. Uses raw HTML, not React Native primitives.
+// Web-only barcode scanner. Raw HTML, not React Native primitives.
+//
+// PRIMARY path = photo capture via <input capture="environment">.
+// This opens the native iOS/Android camera directly and does NOT use
+// getUserMedia, so it can never be "permission denied" and works in every
+// browser (including in-app WebViews). Live camera is a secondary option.
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { BrowserMultiFormatReader } from '@zxing/library';
+import {
+  BrowserMultiFormatReader,
+  DecodeHintType,
+  BarcodeFormat,
+} from '@zxing/library';
 import { Colors } from '../constants/colors';
 
 interface BarcodeScannerProps {
@@ -12,23 +21,30 @@ interface BarcodeScannerProps {
 const SCAN_COOLDOWN_MS = 2000;
 const FINDER = 260;
 
+// Retail barcodes + TRY_HARDER → best hit-rate on a photo
+const HINTS = new Map();
+HINTS.set(DecodeHintType.TRY_HARDER, true);
+HINTS.set(DecodeHintType.POSSIBLE_FORMATS, [
+  BarcodeFormat.EAN_13, BarcodeFormat.EAN_8,
+  BarcodeFormat.UPC_A,  BarcodeFormat.UPC_E,
+  BarcodeFormat.CODE_128,
+]);
+
 export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) {
   const videoRef    = useRef(null);
-  const readerRef   = useRef(null);
+  const liveReader  = useRef(null);
   const fileRef     = useRef(null);
   const lastScanRef = useRef(0);
   const pausedRef   = useRef(paused);
   const onScanRef   = useRef(onScan);
 
-  const [phase, setPhase]       = useState('idle');   // idle | scanning | denied | error
-  const [errMsg, setErrMsg]     = useState('');
-  const [photoErr, setPhotoErr] = useState('');
+  const [mode, setMode]   = useState('idle');   // idle | analyzing | live | liveDenied | liveErr
+  const [msg, setMsg]     = useState('');       // status / error message under buttons
+  const [errMsg, setErr]  = useState('');
 
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   useEffect(() => { onScanRef.current = onScan; }, [onScan]);
-
-  // Stop camera when this component unmounts
-  useEffect(() => () => { readerRef.current?.reset(); }, []);
+  useEffect(() => () => { liveReader.current?.reset(); }, []);
 
   const fireScan = useCallback((text) => {
     if (pausedRef.current) return;
@@ -38,19 +54,35 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
     onScanRef.current(text);
   }, []);
 
-  // ── Live camera ────────────────────────────────────────────────────────────
-  // MUST be called from a user gesture (onClick). decodeFromConstraints invokes
-  // getUserMedia synchronously as its first op, so the gesture is preserved.
-  // The library handles getUserMedia → attach stream → play → decode loop in
-  // the correct order — we must NOT touch srcObject or play() ourselves.
+  // ── PRIMARY: photo capture (native camera, no permission to deny) ──────────
+  const handlePhoto = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    fileRef.current.value = '';
+    setMode('analyzing');
+    setMsg('');
+    const url = URL.createObjectURL(file);
+    try {
+      const result = await new BrowserMultiFormatReader(HINTS).decodeFromImageUrl(url);
+      fireScan(result.getText());
+      setMode('idle');
+    } catch {
+      setMode('idle');
+      setMsg('Nessun codice letto. Inquadra il barcode da vicino, ben dritto e a fuoco, poi riprova.');
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }, [fireScan]);
+
+  const takePhoto = useCallback(() => { setMsg(''); fileRef.current?.click(); }, []);
+
+  // ── SECONDARY: live camera (getUserMedia, can be denied on iOS) ────────────
   const startLive = useCallback(async () => {
-    setErrMsg('');
-    setPhotoErr('');
-    setPhase('scanning'); // reveal the <video> immediately so the ref is live
-
-    const reader = new BrowserMultiFormatReader();
-    readerRef.current = reader;
-
+    setMode('live');
+    setMsg('');
+    setErr('');
+    const reader = new BrowserMultiFormatReader(HINTS);
+    liveReader.current = reader;
     try {
       await reader.decodeFromConstraints(
         { video: { facingMode: { ideal: 'environment' } } },
@@ -61,92 +93,61 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
       reader.reset();
       const name = err?.name ?? 'Error';
       if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
-        setPhase('denied');
+        setMode('liveDenied');
       } else {
-        setErrMsg(`${name}: ${err?.message ?? ''}`);
-        setPhase('error');
+        setErr(`${name}: ${err?.message ?? ''}`);
+        setMode('liveErr');
       }
     }
   }, [fireScan]);
 
-  // ── Photo fallback — native iOS camera via file input, no getUserMedia ─────
-  const handlePhoto = useCallback(async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    fileRef.current.value = '';
-    setPhotoErr('');
-    const url = URL.createObjectURL(file);
-    try {
-      const result = await new BrowserMultiFormatReader().decodeFromImageUrl(url);
-      fireScan(result.getText());
-    } catch {
-      setPhotoErr('Nessun codice trovato nella foto. Inquadra bene il barcode e riprova.');
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  }, [fireScan]);
-
-  const triggerPhoto = useCallback(() => fileRef.current?.click(), []);
-
-  const reset = useCallback(() => {
-    readerRef.current?.reset();
-    readerRef.current = null;
-    setErrMsg('');
-    setPhotoErr('');
-    setPhase('idle');
+  const stopLive = useCallback(() => {
+    liveReader.current?.reset();
+    liveReader.current = null;
+    setMode('idle');
   }, []);
+
+  const showVideo = mode === 'live';
 
   return (
     <div style={s.root}>
       <input ref={fileRef} type="file" accept="image/*" capture="environment"
         style={{ display: 'none' }} onChange={handlePhoto} />
 
-      {/* Always-mounted video — visibility toggled, so the ref is never lost */}
       <video ref={videoRef} playsInline muted autoPlay
-        style={{ ...s.video, visibility: phase === 'scanning' ? 'visible' : 'hidden' }} />
+        style={{ ...s.video, visibility: showVideo ? 'visible' : 'hidden' }} />
 
-      {/* ── Idle ── */}
-      {phase === 'idle' && (
+      {/* ── IDLE — photo is the main action ── */}
+      {(mode === 'idle' || mode === 'analyzing') && (
         <div style={s.center}>
           <div style={s.finder} />
-          <button onClick={startLive} style={s.primaryBtn}>📷 Avvia scanner</button>
-          <button onClick={triggerPhoto} style={s.secondaryBtn}>🖼 Scatta foto al barcode</button>
-          {photoErr && <p style={s.photoErr}>{photoErr}</p>}
+          <button onClick={takePhoto} style={s.primaryBtn} disabled={mode === 'analyzing'}>
+            {mode === 'analyzing' ? '⏳ Analisi…' : '📷 Scansiona prodotto'}
+          </button>
+          {msg && <p style={s.warn}>{msg}</p>}
+          <button onClick={startLive} style={s.linkBtn}>oppure usa la camera live →</button>
         </div>
       )}
 
-      {/* ── Scanning ── */}
-      {phase === 'scanning' && (
+      {/* ── LIVE scanning ── */}
+      {mode === 'live' && (
         <div style={s.overlay}>
           <div style={{ ...s.finder, boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)' }} />
           <p style={s.hint}>Inquadra il codice a barre</p>
-          <button onClick={triggerPhoto} style={s.ghostBtn}>🖼 Usa una foto</button>
+          <button onClick={stopLive} style={s.linkBtn}>← torna allo scatto foto</button>
         </div>
       )}
 
-      {/* ── Denied ── */}
-      {phase === 'denied' && (
+      {/* ── LIVE denied → fall back to photo ── */}
+      {(mode === 'liveDenied' || mode === 'liveErr') && (
         <div style={s.center}>
           <div style={s.finder} />
-          <p style={{ ...s.hint, color: 'rgba(255,200,100,0.95)', maxWidth: 300 }}>
-            Permesso fotocamera negato. Usa "Scatta foto" oppure abilita la camera
-            (Safari → <b>AA</b> → Impostazioni sito web → Fotocamera → Consenti).
-          </p>
-          <button onClick={triggerPhoto} style={s.primaryBtn}>🖼 Scatta foto al barcode</button>
-          {photoErr && <p style={s.photoErr}>{photoErr}</p>}
-          <button onClick={reset} style={s.ghostBtn}>↻ Riprova live</button>
-        </div>
-      )}
-
-      {/* ── Error (shows the real reason so we stop guessing) ── */}
-      {phase === 'error' && (
-        <div style={s.center}>
-          <p style={{ ...s.hint, color: '#ff7b7b', fontFamily: 'monospace', fontSize: 12, maxWidth: 320 }}>
-            {errMsg}
-          </p>
-          <button onClick={triggerPhoto} style={s.primaryBtn}>🖼 Scatta foto al barcode</button>
-          {photoErr && <p style={s.photoErr}>{photoErr}</p>}
-          <button onClick={reset} style={s.ghostBtn}>↻ Riprova</button>
+          {mode === 'liveErr'
+            ? <p style={{ ...s.warn, fontFamily: 'monospace', fontSize: 12 }}>{errMsg}</p>
+            : <p style={s.warn}>Camera live bloccata da Safari. Usa lo scatto foto qui sotto (funziona sempre).</p>}
+          <button onClick={takePhoto} style={s.primaryBtn}>📷 Scansiona prodotto</button>
+          {msg && <p style={s.warn}>{msg}</p>}
+          <button onClick={stopLive} style={s.linkBtn}>← indietro</button>
         </div>
       )}
     </div>
@@ -163,20 +164,15 @@ const s = {
   center: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 16, padding: 32, boxSizing: 'border-box',
+    gap: 18, padding: 32, boxSizing: 'border-box',
   },
   finder: { width: FINDER, height: FINDER, border: `2px solid ${Colors.info}`, borderRadius: 16, flexShrink: 0 },
   hint: { color: 'rgba(255,255,255,0.7)', fontSize: 14, fontWeight: 500, margin: 0, textAlign: 'center' },
-  photoErr: { color: '#ff7b7b', fontSize: 13, margin: 0, textAlign: 'center', maxWidth: 300 },
+  warn: { color: 'rgba(255,200,100,0.95)', fontSize: 13, margin: 0, textAlign: 'center', maxWidth: 300, lineHeight: 1.5 },
   primaryBtn: {
     background: Colors.info, color: '#fff', border: 'none',
-    borderRadius: 14, padding: '15px 28px', fontSize: 16, fontWeight: 700, cursor: 'pointer',
-    width: '100%', maxWidth: 280,
+    borderRadius: 14, padding: '16px 28px', fontSize: 17, fontWeight: 700, cursor: 'pointer',
+    width: '100%', maxWidth: 300,
   },
-  secondaryBtn: {
-    background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)',
-    borderRadius: 14, padding: '13px 28px', fontSize: 15, fontWeight: 600, cursor: 'pointer',
-    width: '100%', maxWidth: 280,
-  },
-  ghostBtn: { background: 'transparent', color: 'rgba(255,255,255,0.5)', border: 'none', padding: '8px 16px', fontSize: 13, cursor: 'pointer' },
+  linkBtn: { background: 'transparent', color: 'rgba(255,255,255,0.55)', border: 'none', padding: '6px', fontSize: 13, cursor: 'pointer' },
 };
