@@ -1,5 +1,4 @@
 // @ts-nocheck
-// Web-only — uses HTML directly, not React Native primitives
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import { Colors } from '../constants/colors';
@@ -12,44 +11,59 @@ interface BarcodeScannerProps {
 const SCAN_COOLDOWN_MS = 2000;
 const FINDER = 260;
 
-type Phase = 'idle' | 'starting' | 'scanning' | 'denied' | 'error';
-
 export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) {
-  const videoRef    = useRef<HTMLVideoElement>(null);
-  const readerRef   = useRef<BrowserMultiFormatReader | null>(null);
-  const streamRef   = useRef<MediaStream | null>(null);
+  const videoRef    = useRef(null);
+  const readerRef   = useRef(null);
+  const streamRef   = useRef(null);
   const lastScanRef = useRef(0);
   const pausedRef   = useRef(paused);
   const onScanRef   = useRef(onScan);
-  const [phase, setPhase]     = useState<Phase>('idle');
-  const [errorMsg, setError]  = useState('');
+
+  const [log, setLog]   = useState([]);
+  const [phase, setPhase] = useState('idle');
 
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   useEffect(() => { onScanRef.current = onScan; }, [onScan]);
 
-  // Cleanup on unmount
   useEffect(() => () => {
     readerRef.current?.reset();
     streamRef.current?.getTracks().forEach(t => t.stop());
   }, []);
 
+  const addLog = (msg) => setLog(l => [...l, msg]);
+
   const startCamera = useCallback(async () => {
+    setLog([]);
     setPhase('starting');
+
+    addLog(`protocol: ${location.protocol}`);
+    addLog(`mediaDevices: ${!!navigator.mediaDevices}`);
+    addLog(`getUserMedia: ${!!(navigator.mediaDevices?.getUserMedia)}`);
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      addLog('❌ getUserMedia non disponibile');
+      setPhase('error');
+      return;
+    }
+
+    addLog('⏳ Chiamando getUserMedia...');
     try {
-      // Request camera directly — this triggers the browser permission dialog
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: { ideal: 'environment' } },
       });
+      addLog(`✅ Stream ottenuto: ${stream.getVideoTracks().length} track`);
       streamRef.current = stream;
 
-      const video = videoRef.current!;
+      const video = videoRef.current;
       video.srcObject = stream;
+      addLog('⏳ video.play()...');
       await video.play();
+      addLog('✅ Video in play');
       setPhase('scanning');
 
-      // Decode barcodes continuously from the live video element
       const reader = new BrowserMultiFormatReader();
       readerRef.current = reader;
+      addLog('⏳ ZXing avviato...');
       reader.decodeFromVideoElementContinuously(video, (result) => {
         if (!result) return;
         if (pausedRef.current) return;
@@ -58,14 +72,13 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
         lastScanRef.current = now;
         onScanRef.current(result.getText());
       });
-    } catch (err: any) {
-      streamRef.current?.getTracks().forEach(t => t.stop());
-      const name = err?.name ?? '';
-      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    } catch (err) {
+      addLog(`❌ ${err?.name}: ${err?.message}`);
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        addLog('→ Permesso negato. Vai in Impostazioni → Safari → Camera');
         setPhase('denied');
       } else {
         setPhase('error');
-        setError(`${err?.name}: ${err?.message}`);
       }
     }
   }, []);
@@ -75,139 +88,79 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
     streamRef.current?.getTracks().forEach(t => t.stop());
     readerRef.current = null;
     streamRef.current = null;
+    setLog([]);
     setPhase('idle');
   }, []);
 
   return (
-    <div style={styles.root}>
-      {/* Video is ALWAYS in the DOM — never unmounted, keeps the ref stable */}
+    <div style={{ position: 'relative', flex: 1, width: '100%', height: '100%', overflow: 'hidden', background: '#000' }}>
       <video
         ref={videoRef}
         playsInline
         muted
         style={{
-          ...styles.video,
-          visibility: phase === 'scanning' || phase === 'starting' ? 'visible' : 'hidden',
+          position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
+          visibility: phase === 'scanning' ? 'visible' : 'hidden',
         }}
       />
 
-      {/* ── Idle ── */}
+      {/* Debug log — mostra sempre se ci sono messaggi */}
+      {log.length > 0 && (
+        <div style={{
+          position: 'absolute', top: 16, left: 16, right: 16, zIndex: 99,
+          background: 'rgba(0,0,0,0.85)', borderRadius: 10, padding: 12,
+          fontFamily: 'monospace', fontSize: 12, color: '#0f0', lineHeight: 1.6,
+        }}>
+          {log.map((l, i) => <div key={i}>{l}</div>)}
+        </div>
+      )}
+
       {phase === 'idle' && (
-        <div style={styles.center}>
-          <div style={styles.finder} />
-          <button onClick={startCamera} style={styles.primaryBtn}>
-            📷 Avvia scanner
-          </button>
-          <p style={styles.hint}>Tocca per attivare la fotocamera</p>
+        <div style={s.center}>
+          <div style={s.finder} />
+          <button onClick={startCamera} style={s.btn}>📷 Avvia scanner</button>
+          <p style={s.hint}>Tocca per attivare la fotocamera</p>
         </div>
       )}
 
-      {/* ── Starting / Scanning ── */}
-      {(phase === 'starting' || phase === 'scanning') && (
-        <div style={styles.overlay}>
-          <div style={{ ...styles.finder, boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)' }} />
-          <p style={styles.hint}>
-            {phase === 'starting' ? 'Caricamento fotocamera…' : 'Allinea il codice a barre nel riquadro'}
-          </p>
+      {(phase === 'starting' || phase === 'error' || phase === 'denied') && (
+        <div style={s.center}>
+          <div style={{ ...s.finder, opacity: 0.3 }} />
+          {phase === 'starting' && <p style={s.hint}>Caricamento…</p>}
+          {(phase === 'error' || phase === 'denied') && (
+            <button onClick={reset} style={{ ...s.btn, background: '#444' }}>Riprova</button>
+          )}
         </div>
       )}
 
-      {/* ── Denied ── */}
-      {phase === 'denied' && (
-        <div style={styles.center}>
-          <p style={{ color: Colors.textSecondary, textAlign: 'center', margin: 0, lineHeight: 1.6 }}>
-            Permesso fotocamera negato.<br />
-            Vai in <b>Impostazioni → Safari → Camera</b><br />
-            e consenti per questo sito.
-          </p>
-          <button onClick={reset} style={styles.secondaryBtn}>Riprova</button>
-        </div>
-      )}
-
-      {/* ── Error ── */}
-      {phase === 'error' && (
-        <div style={styles.center}>
-          <p style={{ color: Colors.error, textAlign: 'center', margin: 0, fontFamily: 'monospace', fontSize: 13 }}>
-            {errorMsg}
-          </p>
-          <button onClick={reset} style={styles.secondaryBtn}>Riprova</button>
+      {phase === 'scanning' && (
+        <div style={s.overlay}>
+          <div style={{ ...s.finder, boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)' }} />
+          <p style={s.hint}>Allinea il codice a barre nel riquadro</p>
         </div>
       )}
     </div>
   );
 }
 
-const styles = {
-  root: {
-    position: 'relative' as const,
-    flex: 1,
-    width: '100%',
-    height: '100%',
-    overflow: 'hidden',
-    background: '#000',
-  },
-  video: {
-    position: 'absolute' as const,
-    inset: 0,
-    width: '100%',
-    height: '100%',
-    objectFit: 'cover' as const,
-    zIndex: 0,
+const s = {
+  center: {
+    position: 'absolute', inset: 0,
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: 24, padding: 32, boxSizing: 'border-box',
   },
   overlay: {
-    position: 'absolute' as const,
-    inset: 0,
-    display: 'flex',
-    flexDirection: 'column' as const,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 20,
-    zIndex: 1,
-  },
-  center: {
-    position: 'absolute' as const,
-    inset: 0,
-    display: 'flex',
-    flexDirection: 'column' as const,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 24,
-    padding: 32,
-    boxSizing: 'border-box' as const,
+    position: 'absolute', inset: 0,
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: 20, zIndex: 1,
   },
   finder: {
-    width: FINDER,
-    height: FINDER,
-    border: `2px solid ${Colors.info}`,
-    borderRadius: 16,
-    flexShrink: 0,
+    width: FINDER, height: FINDER,
+    border: `2px solid ${Colors.info}`, borderRadius: 16, flexShrink: 0,
   },
-  hint: {
-    color: 'rgba(255,255,255,0.75)',
-    fontSize: 14,
-    fontWeight: 500,
-    margin: 0,
-    textAlign: 'center' as const,
-  },
-  primaryBtn: {
-    background: Colors.info,
-    color: '#fff',
-    border: 'none',
-    borderRadius: 14,
-    padding: '16px 32px',
-    fontSize: 17,
-    fontWeight: 700,
-    cursor: 'pointer',
-    WebkitTapHighlightColor: 'transparent',
-  },
-  secondaryBtn: {
-    background: Colors.bgCard,
-    color: Colors.info,
-    border: `1px solid ${Colors.info}`,
-    borderRadius: 12,
-    padding: '12px 24px',
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: 'pointer',
+  hint: { color: 'rgba(255,255,255,0.75)', fontSize: 14, fontWeight: 500, margin: 0, textAlign: 'center' },
+  btn: {
+    background: Colors.info, color: '#fff', border: 'none',
+    borderRadius: 14, padding: '16px 32px', fontSize: 17, fontWeight: 700, cursor: 'pointer',
   },
 };
