@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+// @ts-nocheck
+// Web-only file — uses HTML/CSS directly, not React Native primitives
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import { Colors } from '../constants/colors';
 
@@ -9,29 +10,27 @@ interface BarcodeScannerProps {
 }
 
 const SCAN_COOLDOWN_MS = 2000;
-const FINDER_SIZE = 260;
+const FINDER = 260;
 
 export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) {
-  const containerRef = useRef<View>(null);
-  const lastScanRef  = useRef(0);
-  // Keep latest values in refs so the ZXing callback never goes stale
-  const pausedRef = useRef(paused);
-  const onScanRef = useRef(onScan);
+  const readerRef   = useRef(null);
+  const lastScanRef = useRef(0);
+  const pausedRef   = useRef(paused);
+  const onScanRef   = useRef(onScan);
+  const [denied, setDenied] = useState(false);
+
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   useEffect(() => { onScanRef.current = onScan; }, [onScan]);
 
-  useEffect(() => {
-    const domNode = containerRef.current as unknown as HTMLDivElement;
-    if (!domNode) return;
-
-    const video = document.createElement('video');
-    video.setAttribute('playsinline', '');
-    video.muted = true;
-    video.style.cssText =
-      'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;';
-    domNode.appendChild(video);
+  // videoCallbackRef fires when the <video> element enters the DOM
+  const videoCallbackRef = useCallback((video) => {
+    if (!video) {
+      readerRef.current?.reset();
+      return;
+    }
 
     const reader = new BrowserMultiFormatReader();
+    readerRef.current = reader;
 
     reader
       .decodeFromConstraints(
@@ -52,48 +51,103 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
           onScanRef.current(result.getText());
         }
       )
-      .catch(() => {});
-
-    return () => {
-      reader.reset();
-      video.remove();
-    };
+      .catch((err) => {
+        if (err?.name === 'NotAllowedError') setDenied(true);
+      });
   }, []);
 
+  if (denied) {
+    return (
+      <div style={s.denied}>
+        <p style={{ color: Colors.textSecondary, textAlign: 'center', margin: 0 }}>
+          Accesso alla fotocamera negato.
+        </p>
+        <button onClick={() => window.location.reload()} style={s.retryBtn}>
+          Riprova
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <View ref={containerRef} style={styles.container}>
-      {/* viewfinder overlay sits above the imperatively-mounted video */}
-      <View style={styles.overlay}>
-        <View style={styles.viewfinder} />
-        <Text style={styles.hint}>Allinea il codice a barre nel riquadro</Text>
-      </View>
-    </View>
+    <div style={s.root}>
+      <video
+        ref={videoCallbackRef}
+        playsInline
+        muted
+        style={s.video}
+      />
+      <div style={s.overlay}>
+        <div style={s.finder} />
+        <p style={s.hint}>Allinea il codice a barre nel riquadro</p>
+      </div>
+    </div>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
+const s = {
+  root: {
+    position: 'relative',
     flex: 1,
-    backgroundColor: '#000',
+    width: '100%',
+    height: '100%',
+    overflow: 'hidden',
+    background: '#000',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  video: {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    zIndex: 0,
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems:     'center',
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
     justifyContent: 'center',
     gap: 20,
     zIndex: 1,
   },
-  viewfinder: {
-    width:        FINDER_SIZE,
-    height:       FINDER_SIZE,
+  finder: {
+    width:  FINDER,
+    height: FINDER,
+    border: `2px solid ${Colors.info}`,
     borderRadius: 16,
-    borderWidth:  2,
-    borderColor:  Colors.info,
-    backgroundColor: 'transparent',
+    boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
   },
   hint: {
-    color:      'rgba(255,255,255,0.7)',
-    fontSize:   13,
-    fontWeight: '500',
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 13,
+    fontWeight: 500,
+    margin: 0,
   },
-});
+  denied: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: Colors.bg,
+    gap: 16,
+    padding: 32,
+  },
+  retryBtn: {
+    background: Colors.info,
+    color: '#fff',
+    border: 'none',
+    borderRadius: 12,
+    padding: '12px 24px',
+    fontSize: 15,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+};
