@@ -1,4 +1,5 @@
 // @ts-nocheck
+// Web-only — uses HTML directly
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import { Colors } from '../constants/colors';
@@ -15,12 +16,13 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
   const videoRef    = useRef(null);
   const readerRef   = useRef(null);
   const streamRef   = useRef(null);
+  const fileRef     = useRef(null);
   const lastScanRef = useRef(0);
   const pausedRef   = useRef(paused);
   const onScanRef   = useRef(onScan);
 
-  const [log, setLog]   = useState([]);
-  const [phase, setPhase] = useState('idle');
+  const [phase, setPhase]       = useState('idle');  // idle | starting | scanning | denied | photoError
+  const [photoErr, setPhotoErr] = useState('');
 
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   useEffect(() => { onScanRef.current = onScan; }, [onScan]);
@@ -30,41 +32,21 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
     streamRef.current?.getTracks().forEach(t => t.stop());
   }, []);
 
-  const addLog = (msg) => setLog(l => [...l, msg]);
-
-  const startCamera = useCallback(async () => {
-    setLog([]);
+  // ── Live camera (getUserMedia) ─────────────────────────────────────────────
+  const startLive = useCallback(async () => {
     setPhase('starting');
-
-    addLog(`protocol: ${location.protocol}`);
-    addLog(`mediaDevices: ${!!navigator.mediaDevices}`);
-    addLog(`getUserMedia: ${!!(navigator.mediaDevices?.getUserMedia)}`);
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      addLog('❌ getUserMedia non disponibile');
-      setPhase('error');
-      return;
-    }
-
-    addLog('⏳ Chiamando getUserMedia...');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
       });
-      addLog(`✅ Stream ottenuto: ${stream.getVideoTracks().length} track`);
       streamRef.current = stream;
-
-      const video = videoRef.current;
-      video.srcObject = stream;
-      addLog('⏳ video.play()...');
-      await video.play();
-      addLog('✅ Video in play');
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
       setPhase('scanning');
 
       const reader = new BrowserMultiFormatReader();
       readerRef.current = reader;
-      addLog('⏳ ZXing avviato...');
-      reader.decodeFromVideoElementContinuously(video, (result) => {
+      reader.decodeFromVideoElementContinuously(videoRef.current, (result) => {
         if (!result) return;
         if (pausedRef.current) return;
         const now = Date.now();
@@ -72,15 +54,37 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
         lastScanRef.current = now;
         onScanRef.current(result.getText());
       });
-    } catch (err) {
-      addLog(`❌ ${err?.name}: ${err?.message}`);
-      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
-        addLog('→ Permesso negato. Vai in Impostazioni → Safari → Camera');
-        setPhase('denied');
-      } else {
-        setPhase('error');
-      }
+    } catch {
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      setPhase('denied');
     }
+  }, []);
+
+  // ── Photo fallback: <input capture="environment"> — bypasses getUserMedia ──
+  // Works on iOS even when camera permission for the web app is denied
+  const handlePhoto = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    fileRef.current.value = '';   // reset so same file can be re-selected
+
+    setPhotoErr('');
+    try {
+      const url = URL.createObjectURL(file);
+      const reader = new BrowserMultiFormatReader();
+      const result = await reader.decodeFromImageUrl(url);
+      URL.revokeObjectURL(url);
+      if (pausedRef.current) return;
+      const now = Date.now();
+      if (now - lastScanRef.current < SCAN_COOLDOWN_MS) return;
+      lastScanRef.current = now;
+      onScanRef.current(result.getText());
+    } catch {
+      setPhotoErr('Nessun codice trovato. Avvicina la camera al barcode.');
+    }
+  }, []);
+
+  const triggerPhoto = useCallback(() => {
+    fileRef.current?.click();
   }, []);
 
   const reset = useCallback(() => {
@@ -88,55 +92,76 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
     streamRef.current?.getTracks().forEach(t => t.stop());
     readerRef.current = null;
     streamRef.current = null;
-    setLog([]);
     setPhase('idle');
   }, []);
 
   return (
-    <div style={{ position: 'relative', flex: 1, width: '100%', height: '100%', overflow: 'hidden', background: '#000' }}>
+    <div style={s.root}>
+      {/* Hidden file input — triggers native camera on iOS */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: 'none' }}
+        onChange={handlePhoto}
+      />
+
+      {/* Live video — always in DOM */}
       <video
         ref={videoRef}
         playsInline
         muted
-        style={{
-          position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
-          visibility: phase === 'scanning' ? 'visible' : 'hidden',
-        }}
+        style={{ ...s.video, visibility: phase === 'scanning' ? 'visible' : 'hidden' }}
       />
 
-      {/* Debug log — mostra sempre se ci sono messaggi */}
-      {log.length > 0 && (
-        <div style={{
-          position: 'absolute', top: 16, left: 16, right: 16, zIndex: 99,
-          background: 'rgba(0,0,0,0.85)', borderRadius: 10, padding: 12,
-          fontFamily: 'monospace', fontSize: 12, color: '#0f0', lineHeight: 1.6,
-        }}>
-          {log.map((l, i) => <div key={i}>{l}</div>)}
-        </div>
-      )}
-
+      {/* ── Idle ── */}
       {phase === 'idle' && (
         <div style={s.center}>
           <div style={s.finder} />
-          <button onClick={startCamera} style={s.btn}>📷 Avvia scanner</button>
-          <p style={s.hint}>Tocca per attivare la fotocamera</p>
+          <button onClick={startLive} style={s.primaryBtn}>
+            📷 Scansiona live
+          </button>
+          <button onClick={triggerPhoto} style={s.secondaryBtn}>
+            🖼 Scatta foto al barcode
+          </button>
+          {photoErr && <p style={s.err}>{photoErr}</p>}
+          <p style={s.hint}>Se la camera non parte, usa "Scatta foto"</p>
         </div>
       )}
 
-      {(phase === 'starting' || phase === 'error' || phase === 'denied') && (
+      {/* ── Starting ── */}
+      {phase === 'starting' && (
         <div style={s.center}>
           <div style={{ ...s.finder, opacity: 0.3 }} />
-          {phase === 'starting' && <p style={s.hint}>Caricamento…</p>}
-          {(phase === 'error' || phase === 'denied') && (
-            <button onClick={reset} style={{ ...s.btn, background: '#444' }}>Riprova</button>
-          )}
+          <p style={s.hint}>Avvio fotocamera…</p>
         </div>
       )}
 
+      {/* ── Scanning (live) ── */}
       {phase === 'scanning' && (
         <div style={s.overlay}>
           <div style={{ ...s.finder, boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)' }} />
           <p style={s.hint}>Allinea il codice a barre nel riquadro</p>
+          <button onClick={triggerPhoto} style={s.ghostBtn}>🖼 Usa foto invece</button>
+        </div>
+      )}
+
+      {/* ── Denied (live camera) ── */}
+      {phase === 'denied' && (
+        <div style={s.center}>
+          <div style={s.finder} />
+          <p style={{ ...s.hint, color: 'rgba(255,200,100,0.9)' }}>
+            Fotocamera live non disponibile
+          </p>
+          <button onClick={triggerPhoto} style={s.primaryBtn}>
+            🖼 Scatta foto al barcode
+          </button>
+          {photoErr && <p style={s.err}>{photoErr}</p>}
+          <button onClick={reset} style={s.ghostBtn}>← Indietro</button>
+          <p style={{ ...s.hint, fontSize: 12, opacity: 0.5 }}>
+            Per la live: Impostazioni → Safari → Camera → Consenti
+          </p>
         </div>
       )}
     </div>
@@ -144,23 +169,47 @@ export function BarcodeScanner({ onScan, paused = false }: BarcodeScannerProps) 
 }
 
 const s = {
+  root: {
+    position: 'relative', flex: 1, width: '100%', height: '100%',
+    overflow: 'hidden', background: '#000',
+  },
+  video: {
+    position: 'absolute', inset: 0, width: '100%', height: '100%',
+    objectFit: 'cover', zIndex: 0,
+  },
+  overlay: {
+    position: 'absolute', inset: 0, zIndex: 1,
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20,
+  },
   center: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 24, padding: 32, boxSizing: 'border-box',
-  },
-  overlay: {
-    position: 'absolute', inset: 0,
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: 20, zIndex: 1,
+    gap: 16, padding: 32, boxSizing: 'border-box',
   },
   finder: {
     width: FINDER, height: FINDER,
     border: `2px solid ${Colors.info}`, borderRadius: 16, flexShrink: 0,
   },
-  hint: { color: 'rgba(255,255,255,0.75)', fontSize: 14, fontWeight: 500, margin: 0, textAlign: 'center' },
-  btn: {
+  hint: {
+    color: 'rgba(255,255,255,0.65)', fontSize: 13, fontWeight: 500,
+    margin: 0, textAlign: 'center',
+  },
+  err: {
+    color: '#ff6b6b', fontSize: 13, margin: 0, textAlign: 'center',
+  },
+  primaryBtn: {
     background: Colors.info, color: '#fff', border: 'none',
-    borderRadius: 14, padding: '16px 32px', fontSize: 17, fontWeight: 700, cursor: 'pointer',
+    borderRadius: 14, padding: '15px 28px', fontSize: 16, fontWeight: 700, cursor: 'pointer',
+    width: '100%', maxWidth: 280,
+  },
+  secondaryBtn: {
+    background: 'rgba(255,255,255,0.1)', color: '#fff',
+    border: '1px solid rgba(255,255,255,0.25)',
+    borderRadius: 14, padding: '13px 28px', fontSize: 15, fontWeight: 600, cursor: 'pointer',
+    width: '100%', maxWidth: 280,
+  },
+  ghostBtn: {
+    background: 'transparent', color: 'rgba(255,255,255,0.5)',
+    border: 'none', padding: '8px 16px', fontSize: 13, cursor: 'pointer',
   },
 };
