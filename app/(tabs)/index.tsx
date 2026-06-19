@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import {
   StyleSheet, View, Text, Pressable,
-  TextInput, Platform, ScrollView, ActivityIndicator,
+  Platform, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
@@ -27,23 +27,14 @@ const DEMO_PRODUCTS = [
 const isWeb = Platform.OS === 'web';
 
 export default function ScannerScreen() {
-  const router  = useRouter();
-  const sheet   = useRef<BottomSheet>(null);
+  const router = useRouter();
+  const sheet  = useRef<BottomSheet>(null);
   const { state, scan, reset } = useProductScan({ userId: MOCK_USER_ID });
-
-  const [manualBarcode, setManualBarcode] = useState('');
 
   const handleScan = useCallback(async (barcode: string) => {
     sheet.current?.snapToIndex(0);
     await scan(barcode);
   }, [scan]);
-
-  const handleManualSubmit = useCallback(() => {
-    const code = manualBarcode.trim();
-    if (code.length < 4) return;
-    setManualBarcode('');
-    handleScan(code);
-  }, [manualBarcode, handleScan]);
 
   const isLoading  = state.status === 'loading';
   const isFound    = state.status === 'found';
@@ -52,42 +43,12 @@ export default function ScannerScreen() {
   return (
     <View style={styles.container}>
 
-      {/* ── Camera scanner (native only) ── */}
-      {!isWeb && (
-        <BarcodeScanner onScan={handleScan} paused={isLoading || isFound} />
-      )}
+      {/* ── Camera scanner — native or web (BarcodeScanner.web.tsx on web) ── */}
+      <BarcodeScanner onScan={handleScan} paused={isLoading || isFound} />
 
-      {/* ── Web / manual mode ── */}
-      {isWeb && (
-        <View style={styles.webPanel}>
-          <Text style={styles.webTitle}>Product Lookup</Text>
-          <Text style={styles.webSubtitle}>Enter a barcode or tap a demo product</Text>
-
-          {/* Manual barcode input */}
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.barcodeInput}
-              placeholder="e.g. 3017620422003"
-              placeholderTextColor={Colors.textTertiary}
-              value={manualBarcode}
-              onChangeText={setManualBarcode}
-              keyboardType="number-pad"
-              returnKeyType="search"
-              onSubmitEditing={handleManualSubmit}
-            />
-            <Pressable
-              style={[styles.searchBtn, !manualBarcode.trim() && styles.searchBtnDisabled]}
-              onPress={handleManualSubmit}
-              disabled={!manualBarcode.trim() || isLoading}
-            >
-              {isLoading
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={styles.searchBtnText}>Search</Text>
-              }
-            </Pressable>
-          </View>
-
-          {/* Demo shortcuts */}
+      {/* ── Demo product chips — web only, overlaid at bottom ── */}
+      {isWeb && !isFound && !isLoading && (
+        <View style={styles.demoOverlay}>
           <Text style={styles.demoLabel}>Demo products</Text>
           <ScrollView
             horizontal
@@ -99,10 +60,8 @@ export default function ScannerScreen() {
                 key={p.barcode}
                 style={styles.demoChip}
                 onPress={() => handleScan(p.barcode)}
-                disabled={isLoading}
               >
                 <Text style={styles.demoChipText}>{p.label}</Text>
-                <Text style={styles.demoChipCode}>{p.barcode}</Text>
               </Pressable>
             ))}
           </ScrollView>
@@ -137,7 +96,7 @@ export default function ScannerScreen() {
       <BottomSheet
         ref={sheet}
         index={-1}
-        snapPoints={isWeb ? ['55%', '90%'] : ['45%', '85%']}
+        snapPoints={['45%', '85%']}
         enablePanDownToClose
         onClose={reset}
         backgroundStyle={styles.sheetBg}
@@ -223,52 +182,31 @@ const pillStyles = StyleSheet.create({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bg },
 
-  // ── Web panel ──────────────────────────────────────────────────────────────
-  webPanel: {
-    flex: 1, padding: 24, paddingTop: 64, gap: 16,
-  },
-  webTitle:    { color: Colors.textPrimary, fontSize: 28, fontWeight: '700' },
-  webSubtitle: { color: Colors.textSecondary, fontSize: 15, marginBottom: 4 },
-
-  inputRow:    { flexDirection: 'row', gap: 10 },
-  barcodeInput: {
-    flex: 1,
-    backgroundColor:   Colors.bgInput,
-    borderRadius:      14,
-    paddingVertical:   14,
+  // ── Demo strip (web overlay) ───────────────────────────────────────────────
+  demoOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingVertical: 16,
     paddingHorizontal: 16,
-    color:             Colors.textPrimary,
-    fontSize:          16,
-    borderWidth:       1,
-    borderColor:       Colors.border,
+    gap: 10,
+    backgroundColor: 'rgba(14,14,16,0.85)',
   },
-  searchBtn: {
-    backgroundColor: Colors.info,
-    borderRadius:    14,
-    paddingHorizontal: 20,
-    justifyContent:  'center',
-  },
-  searchBtnDisabled: { opacity: 0.4 },
-  searchBtnText:     { color: '#fff', fontWeight: '700', fontSize: 15 },
-
   demoLabel: {
-    color: Colors.textTertiary, fontSize: 12,
+    color: Colors.textTertiary, fontSize: 11,
     fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8,
-    marginTop: 8,
   },
-  demoRow: { gap: 10, paddingBottom: 4 },
+  demoRow: { gap: 8, paddingBottom: 2 },
   demoChip: {
     backgroundColor: Colors.bgCard,
-    borderRadius:    14,
+    borderRadius:    12,
     borderWidth:     1,
     borderColor:     Colors.border,
-    paddingVertical:   12,
-    paddingHorizontal: 16,
-    minWidth:          140,
-    gap:               4,
+    paddingVertical:   10,
+    paddingHorizontal: 14,
   },
-  demoChipText: { color: Colors.textPrimary, fontWeight: '600', fontSize: 14 },
-  demoChipCode: { color: Colors.textTertiary, fontSize: 11 },
+  demoChipText: { color: Colors.textPrimary, fontWeight: '600', fontSize: 13 },
 
   // ── Overlays ───────────────────────────────────────────────────────────────
   loadingOverlay: {
